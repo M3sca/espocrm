@@ -30,7 +30,7 @@
 namespace Espo\Core\ApplicationRunners;
 
 use Espo\Core\{
-    Application\Runner,
+    Application\RunnerParameterized,
     Application\RunnerParams,
     Job\JobManager,
 };
@@ -38,25 +38,21 @@ use Espo\Core\{
 /**
  * Runs a job by ID. A job record should exist in database.
  */
-class Job implements Runner
+class Job implements RunnerParameterized
 {
     use Cli;
     use SetupSystemUser;
 
-    private $params;
-
     private $jobManager;
 
-    public function __construct(JobManager $jobManager, RunnerParams $params)
+    public function __construct(JobManager $jobManager)
     {
         $this->jobManager = $jobManager;
-
-        $this->params = $params;
     }
 
-    public function run(): void
+    public function run(RunnerParams $params): void
     {
-        $id = $this->params->get('id');
+        $id = $params->get('id');
 
         $this->jobManager->runJobById($id);
     }

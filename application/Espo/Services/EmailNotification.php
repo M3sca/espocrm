@@ -29,23 +29,11 @@
 
 namespace Espo\Services;
 
-use Espo\{
-    Tools\EmailNotification\AssignmentProcessor,
-};
-
-use StdClass;
-
+/**
+ * @todo Remove in 7.0.1.
+ */
 class EmailNotification
 {
-    protected $assignmentProcessor;
-
-    public function __construct(AssignmentProcessor $assignmentProcessor)
-    {
-        $this->assignmentProcessor = $assignmentProcessor;
-    }
-
-    public function notifyAboutAssignmentJob(StdClass $data) : void
-    {
-        $this->assignmentProcessor->process($data);
-    }
+    public function __construct()
+    {}
 }

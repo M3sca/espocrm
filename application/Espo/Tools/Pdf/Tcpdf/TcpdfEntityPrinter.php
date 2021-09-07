@@ -33,6 +33,7 @@ use Espo\ORM\Entity;
 use Espo\Tools\Pdf\EntityPrinter;
 use Espo\Tools\Pdf\Template;
 use Espo\Tools\Pdf\Contents;
+use Espo\Tools\Pdf\Params;
 use Espo\Tools\Pdf\Data;
 use Espo\Tools\Pdf\Tcpdf\Tcpdf;
 
@@ -45,11 +46,11 @@ class TcpdfEntityPrinter implements EntityPrinter
         $this->entityProcessor = $entityProcessor;
     }
 
-    public function print(Template $template, Entity $entity, Data $data): Contents
+    public function print(Template $template, Entity $entity, Params $params, Data $data): Contents
     {
         $pdf = new Tcpdf();
 
-        $this->entityProcessor->process($pdf, $template, $entity, $data);
+        $this->entityProcessor->process($pdf, $template, $entity, $params, $data);
 
         return new TcpdfContents($pdf);
     }

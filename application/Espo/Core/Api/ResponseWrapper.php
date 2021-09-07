@@ -44,7 +44,7 @@ class ResponseWrapper implements ApiResponse
     /**
      * @var Psr7Response
      */
-    protected $response;
+    private $response;
 
     public function __construct(Psr7Response $response)
     {
@@ -68,6 +68,13 @@ class ResponseWrapper implements ApiResponse
         return $this;
     }
 
+    public function addHeader(string $name, string $value): Response
+    {
+        $this->response = $this->response->withAddedHeader($name, $value);
+
+        return $this;
+    }
+
     public function getHeader(string $name): ?string
     {
         if (!$this->response->hasHeader($name)) {
@@ -82,9 +89,16 @@ class ResponseWrapper implements ApiResponse
         return $this->response->hasHeader($name);
     }
 
-    public function getResponse(): Psr7Response
+    /**
+     * @return string[]
+     */
+    public function getHeaderAsArray(string $name): array
     {
-        return $this->response;
+        if (!$this->response->hasHeader($name)) {
+            return [];
+        }
+
+        return $this->response->getHeader($name);
     }
 
     public function writeBody(string $string): Response
@@ -99,5 +113,10 @@ class ResponseWrapper implements ApiResponse
         $this->response = $this->response->withBody($body);
 
         return $this;
+    }
+
+    public function getResponse(): Psr7Response
+    {
+        return $this->response;
     }
 }

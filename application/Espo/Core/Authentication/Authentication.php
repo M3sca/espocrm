@@ -44,10 +44,11 @@ use Espo\Entities\{
 use Espo\Core\Authentication\{
     Result,
     LoginFactory,
-    TwoFactor\Factory as TwoFAFactory,
+    TwoFactor\MethodFactory as TwoFAFactory,
     AuthToken\AuthTokenManager,
     AuthToken\AuthTokenData,
     AuthToken\AuthToken,
+    Hook\Manager as HookManager,
 };
 
 use Espo\Core\{
@@ -55,16 +56,17 @@ use Espo\Core\{
     ApplicationState,
     ORM\EntityManagerProxy,
     Api\Request,
+    Api\Response,
     Utils\Log,
 };
-
-use DateTime;
 
 /**
  * Handles authentication. The entry point of the auth process.
  */
 class Authentication
 {
+    private const LOGOUT_USERNAME = '**logout';
+
     private $allowAnyAccess;
 
     private $portal;
@@ -81,6 +83,8 @@ class Authentication
 
     private $auth2FAFactory;
 
+    private $hookManager;
+
     private $log;
 
     public function __construct(
@@ -91,6 +95,7 @@ class Authentication
         LoginFactory $authLoginFactory,
         TwoFAFactory $auth2FAFactory,
         AuthTokenManager $authTokenManager,
+        HookManager $hookManager,
         Log $log,
         bool $allowAnyAccess = false
     ) {
@@ -98,46 +103,28 @@ class Authentication
 
         $this->applicationUser = $applicationUser;
         $this->applicationState = $applicationState;
-
         $this->configDataProvider = $configDataProvider;
         $this->entityManager = $entityManagerProxy;
         $this->authLoginFactory = $authLoginFactory;
         $this->auth2FAFactory = $auth2FAFactory;
         $this->authTokenManager = $authTokenManager;
+        $this->hookManager = $hookManager;
         $this->log = $log;
-    }
-
-    protected function setPortal(Portal $portal)
-    {
-        $this->portal = $portal;
-    }
-
-    protected function isPortal(): bool
-    {
-        return (bool) $this->portal || $this->applicationState->isPortal();
-    }
-
-    protected function getPortal(): Portal
-    {
-        if ($this->portal) {
-            return $this->portal;
-        }
-
-        return $this->applicationState->getPortal();
     }
 
     /**
      * Process logging in.
      *
+     * Warning: This method can change the state of the object (by setting the `portal` prop.).
+     *
      * @throws Forbidden
      * @throws ServiceUnavailable
      */
-    public function login(
-        ?string $username,
-        ?string $password,
-        Request $request,
-        ?string $authenticationMethod = null
-    ): Result {
+    public function login(AuthenticationData $data, Request $request, Response $response): Result
+    {
+        $username = $data->getUsername();
+        $password = $data->getPassword();
+        $authenticationMethod = $data->getMethod();
 
         if (
             $authenticationMethod &&
@@ -147,17 +134,22 @@ class Authentication
                 "AUTH: Trying to use not allowed authentication method '{$authenticationMethod}'."
             );
 
-            return Result::fail('Not allowed authentication method');
+            return $this->processFail(
+                Result::fail(FailReason::METHOD_NOT_ALLOWED),
+                $data,
+                $request
+            );
         }
 
-        $isByTokenOnly = !$authenticationMethod && $request->getHeader('Espo-Authorization-By-Token') === 'true';
+        $this->hookManager->processBeforeLogin($data, $request);
 
-        if (!$isByTokenOnly) {
-            $this->checkFailedAttemptsLimit($request);
+        if (!$authenticationMethod && $password === null) {
+            $this->log->error("AUTH: Trying to login w/o password.");
+
+            return Result::fail(FailReason::NO_PASSWORD);
         }
 
         $authToken = null;
-        $authTokenIsFound = false;
 
         if (!$authenticationMethod) {
             $authToken = $this->authTokenManager->get($password);
@@ -171,9 +163,7 @@ class Authentication
             }
         }
 
-        if ($authToken) {
-            $authTokenIsFound = true;
-        }
+        $authTokenIsFound = $authToken !== null;
 
         if ($authToken && !$authToken->isActive()) {
             $authToken = null;
@@ -183,9 +173,11 @@ class Authentication
             $authTokenCheckResult = $this->processAuthTokenCheck($authToken);
 
             if (!$authTokenCheckResult) {
-                return Result::fail('Denied');
+                return Result::fail(FailReason::DENIED);
             }
         }
+
+        $isByTokenOnly = !$authenticationMethod && $request->getHeader('Espo-Authorization-By-Token') === 'true';
 
         if ($isByTokenOnly && !$authToken) {
             if ($username) {
@@ -194,7 +186,11 @@ class Authentication
                 );
             }
 
-            return Result::fail('Token not found');
+            return $this->processFail(
+                Result::fail(FailReason::TOKEN_NOT_FOUND),
+                $data,
+                $request
+            );
         }
 
         if (!$authenticationMethod) {
@@ -221,11 +217,20 @@ class Authentication
         }
 
         if ($result->isFail()) {
-            return $result;
+            return $this->processFail(
+                $result,
+                $data,
+                $request
+            );
         }
 
         if (!$user) {
-            return Result::fail();
+            // Supposed not to ever happen.
+            return $this->processFail(
+                Result::fail(FailReason::USER_NOT_FOUND),
+                $data,
+                $request
+            );
         }
 
         if (!$user->isAdmin() && $this->configDataProvider->isMaintenanceMode()) {
@@ -233,11 +238,15 @@ class Authentication
         }
 
         if (!$this->processUserCheck($user, $authLogRecord)) {
-            return Result::fail('Denied');
+            return $this->processFail(
+                Result::fail(FailReason::DENIED),
+                $data,
+                $request
+            );
         }
 
         if ($this->isPortal()) {
-            $user->set('portalId', $this->getPortal()->id);
+            $user->set('portalId', $this->getPortal()->getId());
         }
 
         if (!$this->isPortal()) {
@@ -256,14 +265,19 @@ class Authentication
             $result = $this->processTwoFactor($result, $request);
 
             if ($result->isFail()) {
-                return $result;
+                return $this->processFail(
+                    $result,
+                    $data,
+                    $request
+                );
             }
         }
 
         if (!$result->isSecondStepRequired() && $request->getHeader('Espo-Authorization')) {
             if (!$authToken) {
-                $authToken = $this->createAuthToken($user, $request);
-            } else {
+                $authToken = $this->createAuthToken($user, $request, $response);
+            }
+            else {
                 $this->authTokenManager->renew($authToken);
             }
 
@@ -281,7 +295,7 @@ class Authentication
 
         if ($authToken && !$authLogRecord && isset($authToken->id)) {
             $authLogRecord = $this->entityManager
-                ->getRepository('AuthLogRecord')
+                ->getRDBRepository('AuthLogRecord')
                 ->select(['id'])
                 ->where([
                     'authTokenId' => $authToken->id
@@ -291,10 +305,37 @@ class Authentication
         }
 
         if ($authLogRecord) {
-            $user->set('authLogRecordId', $authLogRecord->id);
+            $user->set('authLogRecordId', $authLogRecord->getId());
+        }
+
+        if ($result->isSuccess()) {
+            return $this->processSuccess($result, $data, $request, $authTokenIsFound);
+        }
+
+        if ($result->isSecondStepRequired()) {
+            return $this->processSecondStepRequired($result, $data, $request);
         }
 
         return $result;
+    }
+
+    private function setPortal(Portal $portal): void
+    {
+        $this->portal = $portal;
+    }
+
+    private function isPortal(): bool
+    {
+        return (bool) $this->portal || $this->applicationState->isPortal();
+    }
+
+    private function getPortal(): Portal
+    {
+        if ($this->portal) {
+            return $this->portal;
+        }
+
+        return $this->applicationState->getPortal();
     }
 
     private function processAuthTokenCheck(AuthToken $authToken): bool
@@ -311,7 +352,7 @@ class Authentication
             return true;
         }
 
-        if ($this->isPortal() && $authToken->getPortalId() !== $this->getPortal()->id) {
+        if ($this->isPortal() && $authToken->getPortalId() !== $this->getPortal()->getId()) {
             $this->log->info(
                 "AUTH: Trying to login to portal with a token not related to portal."
             );
@@ -398,7 +439,7 @@ class Authentication
 
         if ($code) {
             if (!$impl->verifyCode($loggedUser, $code)) {
-                return Result::fail('Code not verified');
+                return Result::fail(FailReason::CODE_NOT_VERIFIED);
             }
 
             return $result;
@@ -432,48 +473,7 @@ class Authentication
         return $method;
     }
 
-    private function checkFailedAttemptsLimit(Request $request): void
-    {
-        $failedAttemptsPeriod = $this->configDataProvider->getFailedAttemptsPeriod();
-        $maxFailedAttempts = $this->configDataProvider->getMaxFailedAttemptNumber();
-
-        $requestTime = intval($request->getServerParam('REQUEST_TIME_FLOAT'));
-
-        $requestTimeFrom = (new DateTime('@' . $requestTime))->modify('-' . $failedAttemptsPeriod);
-
-        $failAttemptCount = 0;
-
-        $ip = $request->getServerParam('REMOTE_ADDR');
-
-        $where = [
-            'requestTime>' => $requestTimeFrom->format('U'),
-            'ipAddress' => $ip,
-            'isDenied' => true,
-        ];
-
-        $wasFailed = (bool) $this->entityManager
-            ->getRepository('AuthLogRecord')
-            ->select(['id'])
-            ->where($where)
-            ->findOne();
-
-        if ($wasFailed) {
-            $failAttemptCount = $this->entityManager
-                ->getRepository('AuthLogRecord')
-                ->where($where)
-                ->count();
-        }
-
-        if ($failAttemptCount > $maxFailedAttempts) {
-            $this->log->warning(
-                "AUTH: Max failed login attempts exceeded for IP '{$ip}'."
-            );
-
-            throw new Forbidden("Max failed login attempts exceeded.");
-        }
-    }
-
-    private function createAuthToken(User $user, Request $request): AuthToken
+    private function createAuthToken(User $user, Request $request, Response $response): AuthToken
     {
         $createSecret = $request->getHeader('Espo-Authorization-Create-Token-Secret') === 'true';
 
@@ -487,7 +487,7 @@ class Authentication
             'hash' => $user->get('password'),
             'ipAddress' => $request->getServerParam('REMOTE_ADDR'),
             'userId' => $user->id,
-            'portalId' => $this->isPortal() ? $this->getPortal()->id : null,
+            'portalId' => $this->isPortal() ? $this->getPortal()->getId() : null,
             'createSecret' => $createSecret,
         ];
 
@@ -496,7 +496,7 @@ class Authentication
         );
 
         if ($createSecret) {
-            $this->setSecretInCookie($authToken->getSecret());
+            $this->setSecretInCookie($authToken->getSecret(), $response);
         }
 
         if (
@@ -504,7 +504,7 @@ class Authentication
             $authToken instanceof AuthTokenEntity
         ) {
             $concurrentAuthTokenList = $this->entityManager
-                ->getRepository('AuthToken')
+                ->getRDBRepository('AuthToken')
                 ->select(['id'])
                 ->where([
                     'userId' => $user->id,
@@ -523,7 +523,7 @@ class Authentication
         return $authToken;
     }
 
-    public function destroyAuthToken(string $token, Request $request): bool
+    public function destroyAuthToken(string $token, Request $request, Response $response): bool
     {
         $authToken = $this->authTokenManager->get($token);
 
@@ -537,21 +537,21 @@ class Authentication
             $sentSecret = $request->getCookieParam('auth-token-secret');
 
             if ($sentSecret === $authToken->getSecret()) {
-                $this->setSecretInCookie(null);
+                $this->setSecretInCookie(null, $response);
             }
         }
 
         return true;
     }
 
-    protected function createAuthLogRecord(
+    private function createAuthLogRecord(
         ?string $username,
         ?User $user,
         Request $request,
         ?string $authenticationMethod = null
     ): ?AuthLogRecord {
 
-        if ($username === '**logout') {
+        if ($username === self::LOGOUT_USERNAME) {
             return null;
         }
 
@@ -576,7 +576,7 @@ class Authentication
         ]);
 
         if ($this->isPortal()) {
-            $authLogRecord->set('portalId', $this->getPortal()->id);
+            $authLogRecord->set('portalId', $this->getPortal()->getId());
         }
 
         if ($user) {
@@ -603,15 +603,54 @@ class Authentication
         $this->entityManager->saveEntity($authLogRecord);
     }
 
-    private function setSecretInCookie(?string $secret): void
+    private function setSecretInCookie(?string $secret, Response $response): void
     {
-        $time = $secret ? strtotime('+1000 days') : -1;
+        $time = $secret ? strtotime('+1000 days') : 1;
 
-        setcookie('auth-token-secret', $secret, [
-            'expires' => $time,
-            'path' => '/',
-            'httponly' => true,
-            'samesite' => 'Lax',
-        ]);
+        $value = $secret ? $secret : 'deleted';
+
+        $headerValue =
+            'auth-token-secret=' . urlencode($value) .
+            '; path=/' .
+            '; expires=' . gmdate('D, d M Y H:i:s T', $time) .
+            '; HttpOnly' .
+            '; SameSite=Lax';
+
+        $response->addHeader('Set-Cookie', $headerValue);
+    }
+
+    private function processFail(Result $result, AuthenticationData $data, Request $request): Result
+    {
+        $this->hookManager->processOnFail($result, $data, $request);
+
+        return $result;
+    }
+
+    private function processSuccess(
+        Result $result,
+        AuthenticationData $data,
+        Request $request,
+        bool $byToken
+    ): Result {
+        if ($byToken) {
+            $this->hookManager->processOnSuccessByToken($result, $data, $request);
+
+            return $result;
+        }
+
+        $this->hookManager->processOnSuccess($result, $data, $request);
+
+        return $result;
+    }
+
+    private function processSecondStepRequired(
+        Result $result,
+        AuthenticationData $data,
+        Request $request
+    ): Result {
+
+        $this->hookManager->processOnSecondStepRequired($result, $data, $request);
+
+        return $result;
     }
 }

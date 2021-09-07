@@ -29,17 +29,19 @@
 
 namespace Espo\Classes\Cleanup;
 
-use Espo\Core\{
-    Utils\Config,
-    ORM\EntityManager,
-};
+use Espo\Core\Cleanup\Cleanup;
+use Espo\Core\Utils\Config;
+use Espo\ORM\EntityManager;
 
 use DateTime;
 
-class Reminders
+class Reminders implements Cleanup
 {
-    protected $config;
-    protected $entityManager;
+    private $config;
+
+    private $entityManager;
+
+    private $cleanupRemindersPeriod = '15 days';
 
     public function __construct(Config $config, EntityManager $entityManager)
     {
@@ -47,9 +49,7 @@ class Reminders
         $this->entityManager = $entityManager;
     }
 
-    protected $cleanupRemindersPeriod = '15 days';
-
-    public function process()
+    public function process(): void
     {
         $period = '-' . $this->config->get('cleanupRemindersPeriod', $this->cleanupRemindersPeriod);
 
@@ -57,7 +57,8 @@ class Reminders
 
         $dt->modify($period);
 
-        $delete = $this->entityManager->getQueryBuilder()
+        $delete = $this->entityManager
+            ->getQueryBuilder()
             ->delete()
             ->from('Reminder')
             ->where([

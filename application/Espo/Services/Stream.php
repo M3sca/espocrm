@@ -33,6 +33,8 @@ use Espo\Core\Exceptions\Forbidden;
 use Espo\Core\Exceptions\NotFound;
 use Espo\Core\Exceptions\Error;
 
+use Espo\Tools\Stream\NoteAccessControl;
+
 use Espo\ORM\{
     Entity,
     EntityCollection,
@@ -42,8 +44,6 @@ use Espo\ORM\{
 use Espo\{
     Entities\User,
     Entities\Note as NoteEntity,
-    Services\Notification as NotificationService,
-    Services\Stream\NoteAccessControl,
 };
 
 use Espo\Core\{
@@ -66,11 +66,11 @@ use DateTime;
 
 class Stream
 {
-    protected $statusStyles = null;
+    private $statusStyles = null;
 
-    protected $statusFields = null;
+    private $statusFields = null;
 
-    protected $successDefaultStyleList = [
+    private $successDefaultStyleList = [
         'Held',
         'Closed Won',
         'Closed',
@@ -79,37 +79,35 @@ class Stream
         'Sold',
     ];
 
-    protected $dangerDefaultStyleList = [
+    private $dangerDefaultStyleList = [
         'Not Held',
         'Closed Lost',
         'Dead',
     ];
 
-    protected $auditedFieldsCache = [];
+    private $auditedFieldsCache = [];
 
-    private $notificationService = null;
+    private $entityManager;
 
-    protected $entityManager;
+    private $config;
 
-    protected $config;
+    private $user;
 
-    protected $user;
+    private $metadata;
 
-    protected $metadata;
+    private $acl;
 
-    protected $acl;
+    private $aclManager;
 
-    protected $aclManager;
+    private $serviceFactory;
 
-    protected $serviceFactory;
+    private $fieldUtil;
 
-    protected $fieldUtil;
-
-    protected $selectBuilderFactory;
+    private $selectBuilderFactory;
 
     private $noteAccessControl;
 
-    protected const NOTE_ACL_PERIOD = '1 hour';
+    private const NOTE_ACL_PERIOD = '1 hour';
 
     public function __construct(
         EntityManager $entityManager,
@@ -137,16 +135,7 @@ class Stream
         $this->noteAccessControl = $noteAccessControl;
     }
 
-    protected function getNotificationService(): NotificationService
-    {
-        if (!$this->notificationService) {
-            $this->notificationService = $this->serviceFactory->create('Notification');
-        }
-
-        return $this->notificationService;
-    }
-
-    protected function getStatusStyles(): array
+    private function getStatusStyles(): array
     {
         if (empty($this->statusStyles)) {
             $this->statusStyles = $this->metadata->get('entityDefs.Note.statusStyles', []);
@@ -155,7 +144,7 @@ class Stream
         return $this->statusStyles;
     }
 
-    protected function getStatusFields(): array
+    private function getStatusFields(): array
     {
         if (is_null($this->statusFields)) {
             $this->statusFields = [];
@@ -174,77 +163,6 @@ class Stream
         return $this->statusFields;
     }
 
-    public function afterRecordCreatedJob(StdClass $data): void
-    {
-        if (empty($data)) {
-            return;
-        }
-
-        if (empty($data->entityId) || empty($data->entityType) || empty($data->userIdList)) {
-            return;
-        }
-
-        $userIdList = $data->userIdList;
-        $entityType = $data->entityType;
-        $entityId = $data->entityId;
-
-        $entity = $this->entityManager->getEntity($entityType, $entityId);
-
-        if (!$entity) {
-            return;
-        }
-
-        foreach ($userIdList as $i => $userId) {
-            $user = $this->entityManager->getEntity('User', $userId);
-
-            if (!$user) {
-                unset($userIdList[$i]);
-
-                continue;
-            }
-
-            try {
-                $hasAccess = $this->aclManager->checkEntityStream($user, $entity);
-            }
-            catch (AclNotImplemented $e) {
-                $hasAccess = false;
-            }
-
-            if (!$hasAccess) {
-                unset($userIdList[$i]);
-            }
-        }
-
-        $userIdList = array_values($userIdList);
-
-        foreach ($userIdList as $i => $userId) {
-            if ($this->checkIsFollowed($entity, $userId)) {
-                unset($userIdList[$i]);
-            }
-        }
-
-        $userIdList = array_values($userIdList);
-
-        if (empty($userIdList)) {
-            return;
-        }
-
-        $this->followEntityMass($entity, $userIdList);
-
-        $noteList = $this->entityManager
-            ->getRepository('Note')
-            ->where([
-                'parentType' => $entityType,
-                'parentId' => $entityId
-            ])
-            ->order('number', 'ASC')
-            ->find();
-
-        foreach ($noteList as $note) {
-            $this->getNotificationService()->notifyAboutNote($userIdList, $note);
-        }
-    }
-
     public function checkIsFollowed(Entity $entity, ?string $userId = null): bool
     {
         if (!$userId) {
@@ -252,7 +170,7 @@ class Stream
         }
 
         $isFollowed = (bool) $this->entityManager
-            ->getRepository('Subscription')
+            ->getRDBRepository('Subscription')
             ->select(['id'])
             ->where([
                 'userId' => $userId,
@@ -285,7 +203,7 @@ class Stream
         if (!$skipAclCheck) {
             foreach ($userIdList as $i => $userId) {
                 $user = $this->entityManager
-                    ->getRepository('User')
+                    ->getRDBRepository('User')
                     ->select(['id', 'type', 'isActive'])
                     ->where([
                         'id' => $userId,
@@ -358,7 +276,7 @@ class Stream
 
         if (!$skipAclCheck) {
             $user = $this->entityManager
-                ->getRepository('User')
+                ->getRDBRepository('User')
                 ->select(['id', 'type', 'isActive'])
                 ->where([
                     'id' => $userId,
@@ -514,7 +432,6 @@ class Stream
             ->select($select)
             ->order('number', 'DESC')
             ->limit(0, $sqLimit)
-            ->useIndex('number')
             ->where(
                 $this->getUserStreamWhereClause($params, $user)
             );
@@ -871,7 +788,7 @@ class Stream
             ->compose($unionQuery);
 
         $sthCollection = $this->entityManager
-            ->getRepository('Note')
+            ->getRDBRepository('Note')
             ->findBySql($sql);
 
         $collection = $this->entityManager
@@ -898,7 +815,7 @@ class Stream
         ];
     }
 
-    protected function getUserStreamWhereClause(array $params, User $user): array
+    private function getUserStreamWhereClause(array $params, User $user): array
     {
         $whereClause = [];
 
@@ -947,7 +864,7 @@ class Stream
         return $whereClause;
     }
 
-    protected function loadNoteAdditionalFields(Entity $e): void
+    private function loadNoteAdditionalFields(Entity $e): void
     {
         if ($e->get('type') == 'Post' || $e->get('type') == 'EmailReceived') {
             $e->loadAttachments();
@@ -1202,7 +1119,7 @@ class Stream
             ->order('number', 'DESC');
 
         $collection = $this->entityManager
-            ->getRepository('Note')
+            ->getRDBRepository('Note')
             ->clone($builder->build())
             ->find();
 
@@ -1226,7 +1143,7 @@ class Stream
         }
 
         $count = $this->entityManager
-            ->getRepository('Note')
+            ->getRDBRepository('Note')
             ->clone($countBuilder->build())
             ->count();
 
@@ -1236,10 +1153,10 @@ class Stream
         ];
     }
 
-    protected function loadAssignedUserName(Entity $entity): void
+    private function loadAssignedUserName(Entity $entity): void
     {
         $user = $this->entityManager
-            ->getRepository('User')
+            ->getRDBRepository('User')
             ->select(['name'])
             ->where([
                 'id' =>  $entity->get('assignedUserId'),
@@ -1258,7 +1175,7 @@ class Stream
      * When users or teams of `related` or `parent` record are changed
      * the note record will be changed too.
      */
-    protected function processNoteTeamsUsers(Entity $note, Entity $entity): void
+    private function processNoteTeamsUsers(Entity $note, Entity $entity): void
     {
         $note->setAclIsProcessed();
 
@@ -1324,7 +1241,7 @@ class Stream
 
         if (
             $this->entityManager
-                ->getRepository('Note')
+                ->getRDBRepository('Note')
                 ->where([
                     'type' => 'EmailReceived',
                     'parentId' => $entity->id,
@@ -1371,7 +1288,9 @@ class Stream
         $from = $email->get('from');
 
         if ($from) {
-            $person = $this->entityManager->getRepository('EmailAddress')->getEntityByAddress($from);
+            $person = $this->entityManager
+                ->getRepository('EmailAddress')
+                ->getEntityByAddress($from);
 
             if ($person) {
                 $data['personEntityType'] = $person->getEntityType();
@@ -1421,14 +1340,16 @@ class Stream
 
         $user = $this->user;
 
-        if ($user->id != 'system') {
+        if ($user->getId() != 'system') {
             $person = $user;
         }
         else {
             $from = $email->get('from');
 
             if ($from) {
-                $person = $this->entityManager->getRepository('EmailAddress')->getEntityByAddress($from);
+                $person = $this->entityManager
+                    ->getRepository('EmailAddress')
+                    ->getEntityByAddress($from);
             }
         }
 
@@ -1496,7 +1417,7 @@ class Stream
         $this->entityManager->saveEntity($note, $o);
     }
 
-    protected function getStatusStyle(string $entityType, string $field, $value): string
+    private function getStatusStyle(string $entityType, string $field, $value): string
     {
         $style = $this->metadata->get(['entityDefs', $entityType, 'fields', $field, 'style', $value]);
 
@@ -1561,7 +1482,7 @@ class Stream
         $entityType = $entity->getEntityType();
 
         $existing = $this->entityManager
-            ->getRepository('Note')
+            ->getRDBRepository('Note')
             ->select(['id'])
             ->where([
                 'type' => 'Relate',
@@ -1681,7 +1602,7 @@ class Stream
         $this->entityManager->saveEntity($note, $o);
     }
 
-    protected function getAuditedFieldsData(Entity $entity): array
+    private function getAuditedFieldsData(Entity $entity): array
     {
         $entityType = $entity->getEntityType();
 
@@ -1795,10 +1716,13 @@ class Stream
         $this->entityManager->saveEntity($note, $o);
     }
 
+    /**
+     * @return string[]
+     */
     public function getEntityFolowerIdList(Entity $entity): array
     {
         $userList = $this->entityManager
-            ->getRepository('User')
+            ->getRDBRepository('User')
             ->select(['id'])
             ->join('Subscription', 'subscription', [
                 'subscription.userId=:' => 'user.id',
@@ -1844,12 +1768,12 @@ class Stream
         $query = $builder->build();
 
         $collection = $this->entityManager
-            ->getRepository('User')
+            ->getRDBRepository('User')
             ->clone($query)
             ->find();
 
         $total = $this->entityManager
-            ->getRepository('User')
+            ->getRDBRepository('User')
             ->clone($query)
             ->count();
 
@@ -1868,7 +1792,8 @@ class Stream
             $limit = 200;
         }
 
-        $userList = $this->entityManager->getRepository('User')
+        $userList = $this->entityManager
+            ->getRDBRepository('User')
             ->select(['id', 'name'])
             ->join(
                 'Subscription',
@@ -1904,7 +1829,7 @@ class Stream
         return $data;
     }
 
-    protected function getOnlyTeamEntityTypeList(User $user): array
+    private function getOnlyTeamEntityTypeList(User $user): array
     {
         if ($user->isPortal()) {
             return [];
@@ -1937,7 +1862,7 @@ class Stream
         return $list;
     }
 
-    protected function getOnlyOwnEntityTypeList(User $user): array
+    private function getOnlyOwnEntityTypeList(User $user): array
     {
         if ($user->isPortal()) {
             return [];
@@ -1970,7 +1895,7 @@ class Stream
         return $list;
     }
 
-    protected function getUserAclManager(User $user): ?AclManager
+    private function getUserAclManager(User $user): ?AclManager
     {
         try {
             return $this->userAclManagerProvider->get($user);
@@ -1980,7 +1905,7 @@ class Stream
         }
     }
 
-    protected function getNotAllEntityTypeList(User $user): array
+    private function getNotAllEntityTypeList(User $user): array
     {
         if (!$user->isPortal()) {
             return [];
@@ -2015,7 +1940,7 @@ class Stream
         return $list;
     }
 
-    protected function getIgnoreScopeList(User $user): array
+    private function getIgnoreScopeList(User $user): array
     {
         $ignoreScopeList = [];
 
@@ -2050,57 +1975,14 @@ class Stream
         return $ignoreScopeList;
     }
 
-    public function controlFollowersJob(StdClass $data): void
-    {
-        if (empty($data)) {
-            return;
-        }
-
-        if (empty($data->entityId) || empty($data->entityType)) {
-            return;
-        }
-
-        if (!$this->entityManager->hasRepository($data->entityType)) {
-            return;
-        }
-
-        $entity = $this->entityManager->getEntity($data->entityType, $data->entityId);
-
-        if (!$entity) {
-            return;
-        }
-
-        $idList = $this->getEntityFolowerIdList($entity);
-
-        $userList = $this->entityManager
-            ->getRepository('User')
-            ->where([
-                'id' => $idList,
-            ])
-            ->find();
-
-        foreach ($userList as $user) {
-            if (!$user->get('isActive')) {
-                $this->unfollowEntity($entity, $user->id);
-
-                continue;
-            }
-
-            if (!$user->isPortal() && !$this->aclManager->check($user, $entity, 'stream')) {
-                $this->unfollowEntity($entity, $user->id);
-
-                continue;
-            }
-        }
-    }
-
     public function getSubscriberList(string $parentType, string $parentId, bool $isInternal = false): Collection
     {
         if (!$this->metadata->get(['scopes', $parentType, 'stream'])) {
             return $this->entityManager->getCollectionFactory()->create('User', []);
         }
 
-        $builder = $this->entityManager->getQueryBuilder()
+        $builder = $this->entityManager
+            ->getQueryBuilder()
             ->select()
             ->from('Subscription')
             ->select('userId')
@@ -2119,7 +2001,8 @@ class Stream
 
         $subQuery = $builder->build();
 
-        $userList = $this->entityManager->getRepository('User')
+        $userList = $this->entityManager
+            ->getRDBRepository('User')
             ->where([
                 'isActive' => true,
                 'id=s' => $subQuery->getRaw(),
@@ -2227,7 +2110,7 @@ class Stream
         }
 
         $noteList = $this->entityManager
-            ->getRepository('Note')
+            ->getRDBRepository('Note')
             ->where([
                 'OR' => [
                     [
@@ -2277,7 +2160,7 @@ class Stream
         }
     }
 
-    protected function processNoteAclItem(Entity $entity, NoteEntity $note, array $params): void
+    private function processNoteAclItem(Entity $entity, NoteEntity $note, array $params): void
     {
         $teamsAttributeIsChanged = $params['teamsAttributeIsChanged'];
         $usersAttributeIsChanged = $params['usersAttributeIsChanged'];

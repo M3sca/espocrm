@@ -29,10 +29,7 @@
 
 namespace Espo\Core\Api;
 
-use Psr\Http\Message\{
-    ResponseInterface as Psr7Response,
-    StreamInterface,
-};
+use Psr\Http\Message\StreamInterface;
 
 /**
  * Representation of an HTTP response. An instance is mutable.
@@ -50,6 +47,11 @@ interface Response
     public function setHeader(string $name, string $value): self;
 
     /**
+     * Add a specific header.
+     */
+    public function addHeader(string $name, string $value): self;
+
+    /**
      * Get a header value.
      */
     public function getHeader(string $name): ?string;
@@ -60,6 +62,13 @@ interface Response
     public function hasHeader(string $name): bool;
 
     /**
+     * Get a header values as an array.
+     *
+     * @return string[]
+     */
+    public function getHeaderAsArray(string $name): array;
+
+    /**
      * Write a body.
      */
     public function writeBody(string $string): self;
@@ -68,9 +77,4 @@ interface Response
      * Set a body.
      */
     public function setBody(StreamInterface $body): self;
-
-    /**
-     * Get a result PSR-7 response.
-     */
-    public function getResponse(): Psr7Response;
 }

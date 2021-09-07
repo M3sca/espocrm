@@ -43,13 +43,13 @@ use StdClass;
  */
 class RequestWrapper implements ApiRequest
 {
-    protected $request;
+    private $request;
 
-    protected $basePath;
+    private $basePath;
 
-    protected $parsedBody = null;
+    private $parsedBody = null;
 
-    protected $routeParams;
+    private $routeParams;
 
     public function __construct(Psr7Request $request, string $basePath = '', array $routeParams = [])
     {
@@ -135,6 +135,18 @@ class RequestWrapper implements ApiRequest
         return $this->request->hasHeader($name);
     }
 
+    /**
+     * @return string[]
+     */
+    public function getHeaderAsArray(string $name): array
+    {
+        if (!$this->request->hasHeader($name)) {
+            return [];
+        }
+
+        return $this->request->getHeader($name);
+    }
+
     public function getMethod(): string
     {
         return $this->request->getMethod();
@@ -172,7 +184,7 @@ class RequestWrapper implements ApiRequest
         return Util::cloneObject($this->parsedBody);
     }
 
-    protected function initParsedBody()
+    private function initParsedBody()
     {
         $contents = $this->getBodyContents();
 

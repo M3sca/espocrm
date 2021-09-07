@@ -59,7 +59,8 @@ use Espo\Core\{
     Record\Crud,
     Record\Collection as RecordCollection,
     Record\HookManager as RecordHookManager,
-    FieldValidation\Params as FieldValidationParams,
+    Record\Select\ApplierClassNameListProvider,
+    FieldValidation\FieldValidationParams as FieldValidationParams,
     FieldProcessing\ReadLoadProcessor,
     FieldProcessing\ListLoadProcessor,
     FieldProcessing\LoaderParams as FieldLoaderParams,
@@ -623,6 +624,8 @@ class Service implements Crud,
             $this->processDuplicateCheck($entity, $data);
         }
 
+        $this->recordHookManager->processBeforeCreate($entity, $params);
+
         $this->beforeCreateEntity($entity, $data);
 
         $this->entityManager->saveEntity($entity);
@@ -764,6 +767,9 @@ class Service implements Crud,
             ->from($this->entityType)
             ->withStrictAccessControl()
             ->withSearchParams($preparedSearchParams)
+            ->withAdditionalApplierClassNameList(
+                $this->createSelectApplierClassNameListProvider()->get($this->entityType)
+            )
             ->build();
 
         $collection = $this->getRepository()
@@ -791,6 +797,11 @@ class Service implements Crud,
         }
 
         return new RecordCollection($collection, $total);
+    }
+
+    protected function createSelectApplierClassNameListProvider(): ApplierClassNameListProvider
+    {
+        return $this->injectableFactory->create(ApplierClassNameListProvider::class);
     }
 
     protected function getEntityEvenDeleted(string $id): ?Entity

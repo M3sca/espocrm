@@ -33,7 +33,7 @@ use Espo\Core\InjectableFactory;
 
 class AuthenticationFactory
 {
-    protected $injectableFactory;
+    private $injectableFactory;
 
     public function __construct(InjectableFactory $injectableFactory)
     {

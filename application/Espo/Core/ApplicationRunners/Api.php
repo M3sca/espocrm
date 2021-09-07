@@ -29,204 +29,23 @@
 
 namespace Espo\Core\ApplicationRunners;
 
-use Espo\Core\{
-    Application\Runner,
-    ApplicationUser,
-    Authentication\AuthenticationFactory,
-    Api\AuthBuilderFactory,
-    Api\ErrorOutput,
-    Api\RequestWrapper,
-    Api\ResponseWrapper,
-    Api\RouteProcessor,
-    Utils\Route,
-    Utils\Log,
-};
-
-use Slim\{
-    App as SlimApp,
-    Factory\AppFactory as SlimAppFactory,
-};
-
-use Psr\Http\{
-    Message\ResponseInterface as Psr7Response,
-    Message\ServerRequestInterface as Psr7Request,
-};
-
-use Exception;
-use Throwable;
+use Espo\Core\Application\Runner;
+use Espo\Core\Api\Starter;
 
 /**
  * Runs API request processing.
  */
 class Api implements Runner
 {
-    private $routeProcessor;
+    private $starter;
 
-    private $authenticationFactory;
-
-    private $applicationUser;
-
-    private $routeUtil;
-
-    private $authBuilderFactory;
-
-    private $errorOutput;
-
-    private $log;
-
-    public function __construct(
-        RouteProcessor $routeProcessor,
-        AuthenticationFactory $authenticationFactory,
-        ApplicationUser $applicationUser,
-        Route $routeUtil,
-        AuthBuilderFactory $authBuilderFactory,
-        ErrorOutput $errorOutput,
-        Log $log
-    ) {
-        $this->routeProcessor = $routeProcessor;
-        $this->authenticationFactory = $authenticationFactory;
-        $this->applicationUser = $applicationUser;
-        $this->routeUtil = $routeUtil;
-        $this->authBuilderFactory = $authBuilderFactory;
-        $this->errorOutput = $errorOutput;
-        $this->log = $log;
+    public function __construct(Starter $starter)
+    {
+        $this->starter = $starter;
     }
 
     public function run(): void
     {
-        $slim = SlimAppFactory::create();
-
-        $slim->setBasePath(Route::detectBasePath());
-
-        $slim->addRoutingMiddleware();
-
-        $routeList = $this->routeUtil->getFullList();
-
-        foreach ($routeList as $item) {
-            $this->addRoute($slim, $item);
-        }
-
-        $slim->addErrorMiddleware(false, true, true, $this->log);
-
-        $slim->run();
-    }
-
-    private function addRoute(SlimApp $slim, array $item): void
-    {
-        $method = strtolower($item['method']);
-        $route = $item['route'];
-
-        $slim->$method(
-            $route,
-            function (Psr7Request $request, Psr7Response $response, array $args) use ($item, $slim)
-            {
-                $routeParams = $this->getRouteParams($item, $args);
-
-                $requestWrapped = new RequestWrapper($request, $slim->getBasePath(), $routeParams);
-
-                $responseWrapped = new ResponseWrapper($response);
-
-                $this->processRequest($item, $requestWrapped, $responseWrapped);
-
-                return $responseWrapped->getResponse();
-            }
-        );
-    }
-
-    private function getRouteParams(array $item, array $args): array
-    {
-        $params = [];
-
-        $routeParams = $item['params'] ?? [];
-
-        $paramKeys = array_keys($routeParams);
-
-        $setKeyList = [];
-
-        foreach ($paramKeys as $key) {
-            $value = $routeParams[$key];
-
-            $paramName = $key;
-
-            if ($value[0] === ':') {
-                $realKey = substr($value, 1);
-
-                $params[$paramName] = $args[$realKey];
-
-                $setKeyList[] = $realKey;
-
-                continue;
-            }
-
-            $params[$paramName] = $value;
-        }
-
-        foreach ($args as $key => $value) {
-            if (in_array($key, $setKeyList)) {
-                continue;
-            }
-
-            $params[$key] = $value;
-        }
-
-        return $params;
-    }
-
-    private function processRequest(
-        array $item,
-        RequestWrapper $requestWrapped,
-        ResponseWrapper $responseWrapped
-    ): void {
-
-        $noAuth = $item['noAuth'] ?? false;
-        $route = $item['route'];
-
-        try {
-            $authRequired = !$noAuth;
-
-            $authentication = $this->authenticationFactory->create();
-
-            $apiAuth = $this->authBuilderFactory
-                ->create()
-                ->setAuthentication($authentication)
-                ->setAuthRequired($authRequired)
-                ->build();
-
-            $authResult = $apiAuth->process($requestWrapped, $responseWrapped);
-
-            if (!$authResult->isResolved()) {
-                return;
-            }
-
-            if ($authResult->isResolvedUseNoAuth()) {
-                $this->applicationUser->setupSystemUser();
-            }
-
-            ob_start();
-
-            $this->routeProcessor->process($route, $requestWrapped, $responseWrapped);
-
-            ob_clean();
-        }
-        catch (Exception $exception) {
-            $this->handleException($exception, $requestWrapped, $responseWrapped, $route);
-        }
-    }
-
-    private function handleException(
-        Throwable $exception,
-        RequestWrapper $requestWrapped,
-        ResponseWrapper $responseWrapped,
-        string $route
-    ): void {
-
-        try {
-            $this->errorOutput->process($requestWrapped, $responseWrapped, $exception, $route);
-        }
-        catch (Throwable $exception) {
-            $this->log->error($exception->getMessage());
-
-            $responseWrapped->setStatus(500);
-        }
+        $this->starter->start();
     }
 }

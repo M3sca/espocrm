@@ -29,8 +29,9 @@
 
 namespace Espo\Classes\ConsoleCommands;
 
+use Espo\Tools\Import\Service;
+
 use Espo\Core\{
-    ServiceFactory,
     Console\Command,
     Console\Params,
     Console\IO,
@@ -40,11 +41,11 @@ use Throwable;
 
 class Import implements Command
 {
-    protected $serviceFactory;
+    private $service;
 
-    public function __construct(ServiceFactory $serviceFactory)
+    public function __construct(Service $service)
     {
-        $this->serviceFactory = $serviceFactory;
+        $this->service = $service;
     }
 
     public function run(Params $params, IO $io) : void
@@ -55,8 +56,6 @@ class Import implements Command
 
         $forceResume = $params->hasFlag('resume');
         $revert = $params->hasFlag('revert');
-
-        $service = $this->serviceFactory->create('Import');
 
         if (!$id && $filePath) {
             if (!$paramsId) {
@@ -74,11 +73,11 @@ class Import implements Command
             $contents = file_get_contents($filePath);
 
             try {
-                $result = $service->importFileWithParamsId($contents, $paramsId);
+                $result = $this->service->importContentsWithParamsId($contents, $paramsId);
 
-                $resultId = $result->id;
-                $countCreated = $result->countCreated;
-                $countUpdated = $result->countUpdated;
+                $resultId = $result->getId();
+                $countCreated = $result->getCountCreated();
+                $countUpdated = $result->getCountUpdated();
             }
             catch (Throwable $e) {
                 $io->writeLine("Error occurred: ". $e->getMessage() . "");
@@ -95,7 +94,7 @@ class Import implements Command
             $io->writeLine("Reverting import...");
 
             try {
-                $service->revert($id);
+                $this->service->revert($id);
             }
             catch (Throwable $e) {
                 $io->writeLine("Error occurred: " . $e->getMessage() . "");
@@ -112,7 +111,7 @@ class Import implements Command
             $io->writeLine("Running import, this may take a while...");
 
             try {
-                $result = $service->importById($id, true, $forceResume);
+                $result = $this->service->importById($id, true, $forceResume);
             }
             catch (Throwable $e) {
                 $io->writeLine("Error occurred: " . $e->getMessage() . "");
@@ -120,8 +119,8 @@ class Import implements Command
                 return;
             }
 
-            $countCreated = $result->countCreated;
-            $countUpdated = $result->countUpdated;
+            $countCreated = $result->getCountCreated();
+            $countUpdated = $result->getCountUpdated();
 
             $io->writeLine("Finished. Created: {$countCreated}. Updated: {$countUpdated}.");
 

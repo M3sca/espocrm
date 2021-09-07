@@ -367,6 +367,10 @@ div.list-kanban > div > table {
 
         padding-top: @padding-base-horizontal;
 
+        > div {
+            height: 100%;
+        }
+
         .show-more a {
             margin: 0 auto;
             display: block;
@@ -380,7 +384,11 @@ div.list-kanban > div > table {
         }
 
         .group-column-list {
-            min-height: 200px;
+            min-height: 100px;
+        }
+
+        .group-column-list.drop-active {
+            height: ~"calc(100%)";
         }
     }
 
@@ -396,6 +404,7 @@ div.list-kanban > div > table {
                     overflow-wrap: break-word;
                     word-wrap: break-word;
                     font-size: @font-size-base;
+                    overflow: hidden;
                 }
                 .field.field-large {
                     font-size: @font-size-large;
@@ -919,6 +928,12 @@ table.table-fixed {
 
 .list > ul {
     margin-bottom: 0;
+}
+
+.list > table td {
+    .label-md {
+        line-height: 1.4;
+    }
 }
 
 .list > table td input[type="checkbox"],

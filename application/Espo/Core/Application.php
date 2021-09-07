@@ -33,17 +33,15 @@ use Espo\Core\Container;
 use Espo\Core\Container\ContainerBuilder;
 use Espo\Core\InjectableFactory;
 
-use Espo\Core\Application\Runner;
+use Espo\Core\Application\RunnerRunner;
 use Espo\Core\Application\RunnerParams;
+use Espo\Core\Application\Exceptions\RunnerException;
 use Espo\Core\ApplicationUser;
 
 use Espo\Core\Utils\Autoload;
 use Espo\Core\Utils\Config;
 use Espo\Core\Utils\Metadata;
 use Espo\Core\Utils\ClientManager;
-use Espo\Core\Utils\Log;
-
-use ReflectionClass;
 
 /**
  * A central access point of the application.
@@ -70,37 +68,18 @@ class Application
      * Run an application runner.
      *
      * @param $className A runner class name.
-     * @param $params Runner parameters. Will be passed to a runner's constructor.
+     * @param $params Runner parameters.
      */
     public function run(string $className, ?RunnerParams $params = null): void
     {
-        if (!$className || !class_exists($className)) {
-            $this->getLog()->error("Application runner '{$className}' does not exist.");
+        $runnerRunner = $this->getInjectableFactory()->create(RunnerRunner::class);
 
-            return;
+        try {
+            $runnerRunner->run($className, $params);
         }
-
-        $class = new ReflectionClass($className);
-
-        if ($class->getStaticPropertyValue('cli', false)) {
-            if (substr(php_sapi_name(), 0, 3) !== 'cli') {
-                die("Can be run only via CLI.");
-            }
+        catch (RunnerException $e) {
+            die($e->getMessage());
         }
-
-        if ($class->getStaticPropertyValue('setupSystemUser', false)) {
-            $this->setupSystemUser();
-        }
-
-        $runner = $this->getInjectableFactory()->createWith($className, [
-            'params' => $params ?? RunnerParams::create(),
-        ]);
-
-        if (!$runner instanceof Runner) {
-            die("Class should implement Runner interface.");
-        }
-
-        $runner->run();
     }
 
     /**
@@ -127,11 +106,6 @@ class Application
     protected function getApplicationUser(): ApplicationUser
     {
         return $this->container->get('applicationUser');
-    }
-
-    protected function getLog(): Log
-    {
-        return $this->container->get('log');
     }
 
     protected function getClientManager(): ClientManager

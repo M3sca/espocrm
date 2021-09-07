@@ -29,26 +29,36 @@
 
 namespace Espo\Core\Portal\Utils;
 
+use Espo\Core\Api\Route as RouteItem;
 use Espo\Core\Utils\Route as BaseRoute;
 
 class Route extends BaseRoute
 {
     public function getFullList(): array
     {
-        $routeList = parent::getFullList();
+        $originalRouteList = parent::getFullList();
 
-        foreach ($routeList as $i => $route) {
-            if (isset($route['route'])) {
-                if ($route['route'][0] !== '/') {
-                    $route['route'] = '/' . $route['route'];
-                }
+        $newRouteList = [];
 
-                $route['route'] = '/{portalId}' . $route['route'];
+        foreach ($originalRouteList as $route) {
+            $path = $route->getRoute();
+
+            if ($path[0] !== '/') {
+                $path = '/' . $path;
             }
 
-            $routeList[$i] = $route;
+            $path = '/{portalId}' . $path;
+
+            $newRoute = new RouteItem(
+                $route->getMethod(),
+                $path,
+                $route->getParams(),
+                $route->noAuth()
+            );
+
+            $newRouteList[] = $newRoute;
         }
 
-        return $routeList;
+        return $newRouteList;
     }
 }

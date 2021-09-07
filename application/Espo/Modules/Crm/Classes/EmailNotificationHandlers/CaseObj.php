@@ -29,22 +29,32 @@
 
 namespace Espo\Modules\Crm\Classes\EmailNotificationHandlers;
 
-use Espo\Core\Di;
+use Espo\Core\Notification\EmailNotificationHandler;
 
-use Espo\{
-    ORM\Entity,
-    Entities\User,
-};
+use Espo\Core\Mail\SenderParams;
+use Espo\ORM\Entity;
+use Espo\Entities\User;
+use Espo\Entities\Email;
 
-class CaseObj implements Di\EntityManagerAware
+use Espo\ORM\EntityManager;
+
+class CaseObj implements EmailNotificationHandler
 {
-    use Di\EntityManagerSetter;
+    private $inboundEmailEntityHash = [];
 
-    protected $inboundEmailEntityHash = [];
+    private $entityManager;
 
-    public function getSmtpParams(string $type, Entity $case, User $user = null): ?array
+    public function __construct(EntityManager $entityManager)
     {
-        $inboundEmailId = $case->get('inboundEmailId');
+        $this->entityManager = $entityManager;
+    }
+
+    public function prepareEmail(Email $email, Entity $entity, User $user): void
+    {}
+
+    public function getSenderParams(Entity $entity, User $user): ?SenderParams
+    {
+        $inboundEmailId = $entity->get('inboundEmailId');
 
         if (!$inboundEmailId) {
             return null;
@@ -67,8 +77,6 @@ class CaseObj implements Di\EntityManagerAware
             return null;
         }
 
-        return [
-            'replyToAddress' => $emailAddress,
-        ];
+        return SenderParams::create()->withReplyToAddress($emailAddress);
     }
 }

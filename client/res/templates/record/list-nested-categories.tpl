@@ -53,7 +53,7 @@
                 data-action="openCategory"
                 data-id="{{categoryData.upperId}}"
                 title="{{translate 'Up'}}"
-            ><span class="fas fa-arrow-up text-muted transform-flip-x"></span></a>
+            ><span class="fas fa-arrow-up text-soft transform-flip-x"></span></a>
         </div>
         {{/if}}
     </div>
@@ -68,7 +68,7 @@
                     data-action="openCategory"
                     data-id="{{id}}"
                     data-name="{{name}}"
-                ><span class="far fa-folder text-muted"></span></a>
+                ><span class="far fa-folder text-soft"></span></a>
                 <a
                     href="#{{../scope}}/view/{{id}}"
                     class="action link-gray"

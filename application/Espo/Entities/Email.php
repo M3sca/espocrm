@@ -38,6 +38,10 @@ class Email extends Entity
 {
     public const ENTITY_TYPE = 'Email';
 
+    public const STATUS_BEING_IMPORTED = 'Being Imported';
+    public const STATUS_ARCHIVED = 'Archived';
+    public const STATUS_SENT = 'Sent';
+
     protected function _getSubject()
     {
         return $this->get('name');
@@ -79,7 +83,13 @@ class Email extends Entity
             return null;
         }
 
-        return EmailService::parseFromName($this->get('fromString'));
+        $string = EmailService::parseFromName($this->get('fromString'));
+
+        if ($string === '') {
+            return null;
+        }
+
+        return $string;
     }
 
     protected function _getFromAddress()

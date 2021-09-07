@@ -35,6 +35,7 @@ use Espo\Core\{
     Authentication\LoginData,
     Authentication\Result,
     Authentication\Helpers\UserFinder,
+    Authentication\FailReason,
 };
 
 class ApiKey implements Login
@@ -53,7 +54,7 @@ class ApiKey implements Login
         $user = $this->userFinder->findApiApiKey($apiKey);
 
         if (!$user) {
-            return Result::fail('User not found');
+            return Result::fail(FailReason::WRONG_CREDENTIALS);
         }
 
         return Result::success($user);

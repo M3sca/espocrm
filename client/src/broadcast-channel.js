@@ -28,11 +28,11 @@
 
 define('broadcast-channel', [], function () {
 
-    let Channel = class {
+    return class {
         constructor() {
             this.object = null;
 
-            if (BroadcastChannel) {
+            if (window.BroadcastChannel) {
                 this.object = new BroadcastChannel('app');
             }
         }
@@ -53,6 +53,4 @@ define('broadcast-channel', [], function () {
             this.object.addEventListener('message', callback);
         }
     };
-
-    return Channel;
 });
